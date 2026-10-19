@@ -95,11 +95,6 @@ const NAME_INPUT = {
   description: "Environment-variable style name, e.g. GITHUB_TOKEN",
 } as const
 
-const OUTPUT = {
-  anyOf: [{ type: "string" }, { type: "object", additionalProperties: { type: "string" } }],
-  description: "The value for name, or an object of values keyed by name for names",
-} as const
-
 export default Plugin.define({
   id: "blindfold",
   async setup(ctx) {
@@ -167,6 +162,7 @@ export default Plugin.define({
       const stored = redactor.get(name)
       if (stored !== undefined && !replace) return stored
       return serial(async () => {
+        // Another call may have stored it while this one waited.
         const stored = redactor.get(name)
         if (stored !== undefined && !replace) return stored
         const answer = await ask({ sessionID: request.sessionID, name, reason })
@@ -188,40 +184,25 @@ export default Plugin.define({
           type: "object",
           properties: {
             name: NAME_INPUT,
-            names: {
-              type: "array",
-              items: NAME_INPUT,
-              minItems: 1,
-              uniqueItems: true,
-              description: "Several names to obtain in one call, instead of name. Returns an object keyed by name",
-            },
             reason: { type: "string", minLength: 1, description: "Why the secret is needed, shown to the user if it must be entered" },
             replace: { type: "boolean", description: "Ask the user again even if the secret is already stored" },
           },
+          required: ["name"],
           additionalProperties: false,
         },
-        // Code Mode only passes `content` through as text, so values go in `output`; a regular tool never returns them.
-        ...(settings.codemode.enabled ? { output: OUTPUT } : {}),
         // In Code Mode the value reaches only the running code. As a regular tool the result enters the chat,
         // so it confirms the secret is stored without returning it.
         options: settings.codemode.enabled
           ? { namespace: NAMESPACE, codemode: true, pinned: true }
           : { namespace: NAMESPACE, codemode: false },
         async execute(input, context) {
-          const { name, names, reason, replace } = input as { name?: string; names?: string[]; reason?: string; replace?: boolean }
-          if ((name === undefined) === (names === undefined)) throw new Error("Pass exactly one of name or names")
-          const requested = names ? [...new Set(names)] : [name!]
-          const title = `Secret${requested.length === 1 ? "" : "s"} ${requested.join(", ")}`
-          await context.progress({ title })
-          const values: Record<string, string> = {}
-          // Sequential: each missing secret gets its own dialog, one after another.
-          for (const secret of requested) {
-            values[secret] = await obtain({ sessionID: context.sessionID, name: secret, reason: reason ?? `The agent needs ${secret}.`, replace })
-          }
-          if (settings.codemode.enabled) return { output: names ? values : values[name!], content: `${title} provided.` }
+          const { name, reason, replace } = input as { name: string; reason?: string; replace?: boolean }
+          await context.progress({ title: `Secret ${name}` })
+          const value = await obtain({ sessionID: context.sessionID, name, reason: reason ?? `The agent needs ${name}.`, replace })
+          if (settings.codemode.enabled) return { content: value }
           return {
-            content: `${title} ${requested.length === 1 ? "is" : "are"} stored. Blindfold secrets available: ${redactor.names().join(", ")}.`,
-            metadata: { title, names: requested },
+            content: `Secret ${name} is stored. Blindfold secrets available: ${redactor.names().join(", ")}.`,
+            metadata: { title: `Secret ${name}`, name },
           }
         },
       })

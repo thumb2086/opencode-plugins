@@ -71,17 +71,6 @@ The values shown are the defaults.
 - `shell.approve`: ask for your approval before running shell commands that name a secret.
 - `codemode.enabled`: provide `blindfold.get` in Code Mode. When `false`, it's a regular tool that never returns the value. At least one of `shell.enabled` and `codemode.enabled` must be `true`.
 
-## Multiple secrets
-
-In Code Mode, pass `names` instead of `name` to get several secrets in one call. Missing ones are asked for one dialog at a time, and the values come back as an object keyed by name:
-
-```js
-const { GITHUB_TOKEN, NPM_TOKEN } = await tools.blindfold.get({
-  names: ["GITHUB_TOKEN", "NPM_TOKEN"],
-  reason: "Publish the package",
-})
-```
-
 ## Limitations
 
 Redaction guards against accidental exposure, not a hostile agent. Once you approve a shell command, that program has the real value and can send it anywhere. An agent can transform a value in ways redaction cannot recognize, such as reversing it or printing part of it, or send it to a server it controls. Live shell output shown in the TUI while a command runs is not redacted; the final result is.
