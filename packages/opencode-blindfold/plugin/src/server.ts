@@ -95,6 +95,11 @@ const NAME_INPUT = {
   description: "Environment-variable style name, e.g. GITHUB_TOKEN",
 } as const
 
+const OUTPUT = {
+  anyOf: [{ type: "string" }, { type: "object", additionalProperties: { type: "string" } }],
+  description: "The value for name, or an object of values keyed by name for names",
+} as const
+
 export default Plugin.define({
   id: "blindfold",
   async setup(ctx) {
@@ -148,15 +153,27 @@ export default Plugin.define({
       })
     }
 
+    // The TUI shows one dialog at a time and a new prompt closes the open one, so prompts must not overlap.
+    let queue: Promise<unknown> = Promise.resolve()
+    function serial<T>(task: () => Promise<T>) {
+      const next = queue.then(task, task)
+      queue = next.catch(() => undefined)
+      return next
+    }
+
     async function obtain(request: { sessionID: string; name: string; reason: string; replace?: boolean }) {
       const { name, reason, replace } = request
       if (!new RegExp(NAME_PATTERN).test(name)) throw new Error(`Secret name must match ${NAME_PATTERN}`)
       const stored = redactor.get(name)
       if (stored !== undefined && !replace) return stored
-      const answer = await ask({ sessionID: request.sessionID, name, reason })
-      if (answer.status !== "submitted") throw new Error(failure(name, answer.status))
-      redactor.set(name, answer.value)
-      return answer.value
+      return serial(async () => {
+        const stored = redactor.get(name)
+        if (stored !== undefined && !replace) return stored
+        const answer = await ask({ sessionID: request.sessionID, name, reason })
+        if (answer.status !== "submitted") throw new Error(failure(name, answer.status))
+        redactor.set(name, answer.value)
+        return answer.value
+      })
     }
 
     await ctx.tool.transform((editor) => {
@@ -174,15 +191,17 @@ export default Plugin.define({
             names: {
               type: "array",
               items: NAME_INPUT,
+              minItems: 1,
               uniqueItems: true,
-              description: "Multiple environment-variable style names to obtain in one request",
+              description: "Several names to obtain in one call, instead of name. Returns an object keyed by name",
             },
             reason: { type: "string", minLength: 1, description: "Why the secret is needed, shown to the user if it must be entered" },
             replace: { type: "boolean", description: "Ask the user again even if the secret is already stored" },
           },
-          required: [],
           additionalProperties: false,
         },
+        // Code Mode only passes `content` through as text, so values go in `output`; a regular tool never returns them.
+        ...(settings.codemode.enabled ? { output: OUTPUT } : {}),
         // In Code Mode the value reaches only the running code. As a regular tool the result enters the chat,
         // so it confirms the secret is stored without returning it.
         options: settings.codemode.enabled
@@ -190,24 +209,19 @@ export default Plugin.define({
           : { namespace: NAMESPACE, codemode: false },
         async execute(input, context) {
           const { name, names, reason, replace } = input as { name?: string; names?: string[]; reason?: string; replace?: boolean }
-          const requested = Array.isArray(names) && names.length > 0 ? names : (name ? [name] : [])
-          if (requested.length === 0) throw new Error("Either name or names is required")
-          const uniqueRequested = [...new Set(requested)]
-          await context.progress({ title: `Secret${uniqueRequested.length === 1 ? ` ${uniqueRequested[0]}` : "s"}` })
-          const stored = await Promise.all(uniqueRequested.map(async (secretName) => [secretName, await obtain({
-            sessionID: context.sessionID,
-            name: secretName,
-            reason: reason ?? `The agent needs ${secretName}.`,
-            replace,
-          })] as const))
-          const values = Object.fromEntries(stored)
-          if (settings.codemode.enabled) {
-            if (uniqueRequested.length === 1) return { content: values[uniqueRequested[0]] } as never
-            return { content: values } as never
+          if ((name === undefined) === (names === undefined)) throw new Error("Pass exactly one of name or names")
+          const requested = names ? [...new Set(names)] : [name!]
+          const title = `Secret${requested.length === 1 ? "" : "s"} ${requested.join(", ")}`
+          await context.progress({ title })
+          const values: Record<string, string> = {}
+          // Sequential: each missing secret gets its own dialog, one after another.
+          for (const secret of requested) {
+            values[secret] = await obtain({ sessionID: context.sessionID, name: secret, reason: reason ?? `The agent needs ${secret}.`, replace })
           }
+          if (settings.codemode.enabled) return { output: names ? values : values[name!], content: `${title} provided.` }
           return {
-            content: `Secret${uniqueRequested.length === 1 ? "" : "s"} ${uniqueRequested.join(", ")} stored. Blindfold secrets available: ${redactor.names().join(", ")}.`,
-            metadata: { title: `Secret${uniqueRequested.length === 1 ? ` ${uniqueRequested[0]}` : "s"}`, names: uniqueRequested },
+            content: `${title} ${requested.length === 1 ? "is" : "are"} stored. Blindfold secrets available: ${redactor.names().join(", ")}.`,
+            metadata: { title, names: requested },
           }
         },
       })

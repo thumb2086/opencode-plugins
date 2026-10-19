@@ -98,8 +98,8 @@ test("get asks the user for a missing secret from Code Mode", async () => {
   const [, data] = emitted[0]
   expect(data).toMatchObject({ name: "API_TOKEN", reason: "Call the API" })
   await handlers().submit({ requestID: data.requestID, value: SECRET })
-  expect(await value).toEqual({ content: SECRET })
-  expect(await tools.get("get")!.execute({ name: "API_TOKEN" }, context)).toEqual({ content: SECRET })
+  expect(await value).toEqual({ output: SECRET, content: "Secret API_TOKEN provided." })
+  expect((await tools.get("get")!.execute({ name: "API_TOKEN" }, context)).output).toBe(SECRET)
   expect(emitted.filter(([event]) => event === "requested")).toHaveLength(1)
 
   const replaced = tools.get("get")!.execute({ name: "API_TOKEN", replace: true }, context)
@@ -107,7 +107,28 @@ test("get asks the user for a missing secret from Code Mode", async () => {
   const [, again] = emitted.filter(([event]) => event === "requested").at(-1)!
   expect(again.reason).toBe("The agent needs API_TOKEN.")
   await handlers().submit({ requestID: again.requestID, value: "new-secret" })
-  expect(await replaced).toEqual({ content: "new-secret" })
+  expect((await replaced).output).toBe("new-secret")
+})
+
+test("get with names asks for missing secrets one at a time and returns an object", async () => {
+  const { tools, emitted, handlers, store } = await harness()
+  await store(SECRET, "API_TOKEN")
+  const requested = () => emitted.filter(([event]) => event === "requested")
+  const result = tools.get("get")!.execute({ names: ["API_TOKEN", "NPM_TOKEN", "GH_TOKEN"] }, context)
+  await Bun.sleep(0)
+  expect(requested()).toHaveLength(2)
+  await handlers().submit({ requestID: requested().at(-1)![1].requestID, value: "npm-secret-123" })
+  await Bun.sleep(0)
+  expect(requested()).toHaveLength(3)
+  expect(requested().at(-1)![1].name).toBe("GH_TOKEN")
+  await handlers().submit({ requestID: requested().at(-1)![1].requestID, value: "gh-secret-123" })
+  expect((await result).output).toEqual({ API_TOKEN: SECRET, NPM_TOKEN: "npm-secret-123", GH_TOKEN: "gh-secret-123" })
+})
+
+test("get needs exactly one of name or names", async () => {
+  const { tools } = await harness()
+  await expect(tools.get("get")!.execute({}, context)).rejects.toThrow("exactly one of name or names")
+  await expect(tools.get("get")!.execute({ name: "A", names: ["B"] }, context)).rejects.toThrow("exactly one of name or names")
 })
 
 test("fails when the user cancels or no TUI responds", async () => {

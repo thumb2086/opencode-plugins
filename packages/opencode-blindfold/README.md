@@ -71,34 +71,16 @@ The values shown are the defaults.
 - `shell.approve`: ask for your approval before running shell commands that name a secret.
 - `codemode.enabled`: provide `blindfold.get` in Code Mode. When `false`, it's a regular tool that never returns the value. At least one of `shell.enabled` and `codemode.enabled` must be `true`.
 
-## Multiple keys
+## Multiple secrets
 
-`blindfold.get` accepts either a single `name` or an array of names:
+In Code Mode, pass `names` instead of `name` to get several secrets in one call. Missing ones are asked for one dialog at a time, and the values come back as an object keyed by name:
 
 ```js
-// One secret (returns the value directly in Code Mode)
-await tools.blindfold.get({ name: "GITHUB_TOKEN", reason: "Clone private repo" })
-
-// Several secrets in one request
-const secrets = await tools.blindfold.get({
-  names: ["GITHUB_TOKEN", "NPM_TOKEN", "OPENAI_API_KEY"],
-  reason: "Publish and test the package",
+const { GITHUB_TOKEN, NPM_TOKEN } = await tools.blindfold.get({
+  names: ["GITHUB_TOKEN", "NPM_TOKEN"],
+  reason: "Publish the package",
 })
-// secrets === { GITHUB_TOKEN: "...", NPM_TOKEN: "...", OPENAI_API_KEY: "..." }
 ```
-
-One TUI dialog is shown per missing secret. Already stored secrets are reused unless `replace: true` is passed.
-
-## OBS / terminal live output
-
-The plugin redacts final tool results, messages, and provider HTTP requests. It does **not** redact live stdout/stderr shown in the TUI terminal while a command runs. For OBS streams, run sensitive commands through the bundled redacting wrapper:
-
-```powershell
-$env:BLINDFOLD_SECRETS_FILE = "C:\path\to\secrets.env"
-node scripts/redact-live.mjs -- "node tool.js API_TOKEN"
-```
-
-`scripts/redact-live.mjs` reads `NAME=value` lines from the environment file, injects only secrets named by the command, and replaces raw values plus common encodings with `[REDACTED:NAME]` in live output. This wrapper is agent-neutral and can be used from OpenCode, Codex, CI jobs, or an OBS terminal capture.
 
 ## Limitations
 
